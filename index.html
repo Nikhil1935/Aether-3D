@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Magical Hand Particles</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./index.css" />
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/+esm",
+                "@google/generative-ai": "https://esm.run/@google/generative-ai"
+            }
+        }
+    </script>
+    <script>
+        // On-screen logger for debugging
+        (function () {
+            const oldLog = console.log;
+            const oldWarn = console.warn;
+            const oldError = console.error;
+            const container = document.createElement('div');
+            Object.assign(container.style, {
+                position: 'fixed', bottom: '0', left: '0', width: '100%', maxHeight: '200px',
+                overflowY: 'auto', background: 'rgba(0,0,0,0.8)', color: '#0f0',
+                fontFamily: 'monospace', fontSize: '10px', zIndex: '10000', pointerEvents: 'none',
+                padding: '5px'
+            });
+            document.body.appendChild(container);
+
+            function print(type, args) {
+                const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+                const line = document.createElement('div');
+                line.textContent = `[${type}] ${msg}`;
+                if (type === 'ERR') line.style.color = 'red';
+                if (type === 'WARN') line.style.color = 'orange';
+                container.appendChild(line);
+                container.scrollTop = container.scrollHeight;
+            }
+
+            console.log = function (...args) { oldLog.apply(console, args); print('LOG', args); };
+            console.warn = function (...args) { oldWarn.apply(console, args); print('WARN', args); };
+            console.error = function (...args) { oldError.apply(console, args); print('ERR', args); };
+
+            window.addEventListener('error', e => print('ERR', [e.message]));
+            window.addEventListener('unhandledrejection', e => print('ERR', ['Promise:', e.reason]));
+        })();
+
+        window.addEventListener('unhandledrejection', function (event) {
+            const errorBox = document.getElementById('error-box') || document.createElement('div');
+            errorBox.id = 'error-box';
+            Object.assign(errorBox.style, {
+                position: 'fixed', top: '0', left: '0', width: '100%',
+                background: 'rgba(255, 0, 0, 0.9)', color: 'white', padding: '10px',
+                zIndex: '9999', fontFamily: 'monospace', whiteSpace: 'pre-wrap'
+            });
+            errorBox.innerText += 'PROMISE ERROR: ' + (event.reason ? event.reason.message || event.reason : 'Unknown') + '\n';
+            document.body.appendChild(errorBox);
+        });
+    </script>
+</head>
+
+<body>
+    <!-- Background Canvas managed by Three.js -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Overlay -->
+    <main id="ui-overlay">
+        <header>
+            <h1>Aether Hand Control</h1>
+            <p>Shape the cosmos with your hands</p>
+        </header>
+
+        <div id="instructions">
+            <div class="instruction-item">
+                <span class="icon">🖐️</span>
+                <span>Open Palm: <strong>Move</strong></span>
+            </div>
+            <div class="instruction-item">
+                <span class="icon">🤏</span>
+                <span>Pinch: <strong>Contract</strong></span>
+            </div>
+            <!-- Shape Buttons -->
+            <div id="shape-buttons" style="display: flex; gap: 10px; margin-top: 1rem; flex-wrap: wrap;">
+                <button data-shape="flower" class="instruction-item interactive">✿ Flower</button>
+                <button data-shape="sun" class="instruction-item interactive">☀️ Sun</button>
+                <button data-shape="saturn" class="instruction-item interactive">🪐 Saturn</button>
+                <button data-shape="fireworks" class="instruction-item interactive">🎆 Fireworks</button>
+                <button data-shape="shuttlecock" class="instruction-item interactive">🏸 Shuttlecock</button>
+                <button data-shape="lamp" class="instruction-item interactive">💡 Lamp</button>
+            </div>
+
+            <!-- Controls -->
+            <div id="controls"
+                style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1);">
+                <label for="speed-slider"
+                    style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem; opacity: 0.8;">Rotation
+                    Speed</label>
+                <input type="range" id="speed-slider" min="0" max="3" step="0.1" value="0.5"
+                    style="width: 100%; accent-color: #00fff2;">
+            </div>
+        </div>
+
+        <div id="loading">
+            <div class="spinner"></div>
+            <p>Initializing Vision...</p>
+        </div>
+    </main>
+
+    <!-- Draggable Camera Container -->
+    <div id="camera-container" style="position: fixed; bottom: 20px; right: 20px; z-index: 100;">
+        <div class="drag-handle-bar"
+            style="position: absolute; top: 0; left: 0; right: 0; height: 20px; background: rgba(0,0,0,0.3); cursor: grab; z-index: 2; display: flex; justify-content: center; align-items: center; font-size: 0.6rem; color: rgba(255,255,255,0.7);">
+            DRAG ME
+        </div>
+        <video id="webcam" autoplay playsinline></video>
+
+        <!-- Record Button Overlay -->
+        <div id="record-controls"
+            style="position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 10;">
+            <button id="record-btn" title="Start Recording"></button>
+        </div>
+    </div>
+
+    <!-- Custom Object Dialog -->
+    <div id="custom-shape-dialog">
+        <div class="drag-handle-bar"
+            style="margin: -20px -20px 10px -20px; padding: 10px; background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.1); cursor: grab; display: flex; align-items: center; justify-content: center; border-radius: 16px 16px 0 0;">
+            <h3 style="margin: 0; font-size: 1.0rem; pointer-events: none;">✨ Conjure Object</h3>
+        </div>
+
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" id="shape-input" placeholder="e.g. Heart, Galaxy..." style="flex: 1;">
+            <button id="voice-btn" title="Voice Command"
+                style="width: 40px; height: 40px; border-radius: 50%; border: none; background: rgba(255,255,255,0.1); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+            </button>
+        </div>
+        <button id="shape-submit">Conjure Object</button>
+
+        <!-- Shape List Container -->
+        <div id="shape-list-container">
+            <h4 style="margin: 10px 0 5px 0; font-size: 0.8rem; opacity: 0.7;">AVAILABLE SHAPES</h4>
+            <div id="shape-list"
+                style="max-height: 150px; overflow-y: auto; font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 5px;">
+                <!-- Populated via JS -->
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- Rotation Controls (X & Y) -->
+    <div id="rotation-controls"
+        style="position: fixed; z-index: 100; top: 50%; left: 20px; transform: translateY(-50%); width: 220px; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 15px; color: white; display: none;">
+        <div class="drag-handle-bar"
+            style="margin: -15px -15px 10px -15px; padding: 8px; background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.1); cursor: grab; text-align: center; font-size: 0.8rem; letter-spacing: 1px; border-radius: 12px 12px 0 0;">
+            ROTATION CONTROLS
+        </div>
+
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; font-size: 0.8rem; opacity: 0.7; margin-bottom: 5px;">Tilt (X-Axis)</label>
+            <input type="range" id="rot-x-slider" min="0" max="6.28" step="0.1" value="0"
+                style="width: 100%; accent-color: #bb86fc;">
+        </div>
+
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; font-size: 0.8rem; opacity: 0.7; margin-bottom: 5px;">Spin (Y-Axis)</label>
+            <input type="range" id="rot-y-slider" min="0" max="6.28" step="0.1" value="0"
+                style="width: 100%; accent-color: #bb86fc;">
+        </div>
+
+        <button id="reset-rot-btn"
+            style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: none; border-radius: 6px; color: white; cursor: pointer; font-size: 0.8rem; transition: background 0.2s;">
+            ↺ Reset Rotations
+        </button>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>
